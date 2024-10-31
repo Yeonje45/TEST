@@ -1,0 +1,140 @@
+from flask import Flask, request, redirect, url_for, send_from_directory
+import os
+import datetime
+
+app = Flask(__name__)
+
+# 기본 파일이 저장될 경로
+DEFAULT_UPLOAD_FOLDER = r'C:\Users\ywcho\Desktop\qq\download'
+app.config['UPLOAD_FOLDER'] = DEFAULT_UPLOAD_FOLDER
+
+@app.route('/')
+def upload_form():
+    return '''
+    <html>
+        <body>
+            <h1>파일 및 폴더 업로드</h1>
+            <form method="post" enctype="multipart/form-data">
+                <label for="upload_folder">업로드 경로:</label>
+                <input type="text" id="upload_folder" name="upload_folder" value="{default_upload_folder}"><br><br>
+                <input type="file" name="file" multiple><br><br>
+                <input type="submit" value="업로드">
+            </form>
+            <br>
+            <a href="/files">업로드한 파일 보기</a>
+        </body>
+    </html>
+    '''.format(default_upload_folder=DEFAULT_UPLOAD_FOLDER)
+
+@app.route('/', methods=['POST'])
+def upload_file():
+    if 'file' not in request.files:
+        return '파일이 없습니다.'
+    
+    upload_folder = request.form.get('upload_folder', DEFAULT_UPLOAD_FOLDER)
+    files = request.files.getlist('file')
+    
+    for file in files:
+        if file.filename == '':
+            return '파일 이름이 없습니다.'
+        
+        # 파일 저장
+        filename = file.filename
+        save_path = os.path.join(upload_folder, filename)
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        file.save(save_path)
+    
+    return redirect(url_for('upload_form'))
+
+@app.route('/files')
+def list_files():
+    return display_directory(app.config['UPLOAD_FOLDER'])
+
+def get_file_info(file_path):
+    """파일의 크기와 생성일 반환"""
+    file_size = os.path.getsize(file_path)
+    creation_time = os.path.getctime(file_path)
+    creation_date = datetime.datetime.fromtimestamp(creation_time).strftime('%Y-%m-%d %H:%M:%S')
+    return file_size, creation_date
+
+def display_directory(path, base_path=''):
+    items = os.listdir(path)
+    file_dict = {}
+    folder_list = []
+
+    for item in items:
+        item_path = os.path.join(path, item)
+        if os.path.isfile(item_path):
+            base, ext = os.path.splitext(item)
+            if '_v' in base:
+                base = base.rsplit('_v', 1)[0]
+            if base not in file_dict:
+                file_dict[base] = []
+            file_dict[base].append(item)
+        elif os.path.isdir(item_path):
+            folder_list.append(item)
+
+    file_list = []
+    for base, versions in file_dict.items():
+        versions.sort(reverse=True)
+        latest_version = versions[0]
+        size, date = get_file_info(os.path.join(path, latest_version))
+        version_links = ''.join([f'<option value="/download/{base_path}/{v}">{v}</option>' for v in versions])
+        file_list.append(f'''
+            <li>
+                <strong>{base}</strong> (크기: {size} 바이트, 생성일: {date})
+                <select onchange="location = this.value;">
+                    <option value="#">버전 선택</option>
+                    {version_links}
+                </select>
+            </li>
+        ''')
+
+    for folder in folder_list:
+        file_list.append(f'''
+            <li>
+                <strong>{folder}</strong> (폴더)
+                <a href="/files/{base_path}/{folder}">열기</a>
+            </li>
+        ''')
+
+    if base_path:
+        parent_path = os.path.dirname(base_path.rstrip('/'))
+        if parent_path:
+            file_list.insert(0, f'<li><a href="/files/{parent_path}">상위 폴더로 이동</a></li>')
+        else:
+            file_list.insert(0, f'<li><a href="/files">상위 폴더로 이동</a></li>')
+
+    return f'''
+    <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; }}
+                ul {{ list-style-type: none; padding: 0; }}
+                li {{ margin: 5px 0; }}
+                a {{ text-decoration: none; color: blue; }}
+                a:hover {{ text-decoration: underline; }}
+            </style>
+        </head>
+        <body>
+            <h1>업로드한 파일 및 폴더 목록</h1>
+            <ul>
+                {''.join(file_list)}
+            </ul>
+            <a href="/">돌아가기</a>
+        </body>
+    </html>
+    '''
+
+@app.route('/files/<path:folder_name>')
+def list_subfolder(folder_name):
+    folder_path = os.path.join(app.config['UPLOAD_FOLDER'], folder_name)
+    return display_directory(folder_path, base_path=folder_name)
+
+@app.route('/download/<path:filename>')
+def download_file(filename):
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename, as_attachment=True)
+
+if __name__ == '__main__':
+    app.run(debug=True)
